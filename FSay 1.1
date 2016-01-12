@@ -1,0 +1,270 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <cstrike>
+
+new const PLUGIN[] 	= "Fake Say",
+	  VERSION[] 	= "1.1",
+	  AUTHOR[] 	= "Fuffy"
+
+#define NORMAL DontChange
+#define GREEN DontChange
+#define TEAM_COLOR DontChange
+#define RED Red
+#define BLUE Blue
+#define GREY Grey
+
+enum _:Colors {
+	DontChange,
+	Red,
+	Blue,
+	Grey
+}
+
+stock const g_szTeamName[Colors][] = 
+{
+	"UNASSIGNED",
+	"TERRORIST",
+	"CT",
+	"SPECTATOR"
+}
+
+public plugin_init( )
+{
+	register_plugin( PLUGIN, VERSION, AUTHOR );
+
+	register_concmd( "amx_fsay", "Fsaycmd", ADMIN_KICK, "<Nume> <Mesaj>" );
+}
+
+public Fsaycmd( id, level, cid )
+{
+	if( !cmd_access( id, level, cid, 2 ) )
+		return PLUGIN_HANDLED;
+
+	new arg[37];
+	new arg2[162]
+
+	read_argv( 1, arg, charsmax(arg) - 1 );
+	read_argv( 2, arg2, charsmax(arg2) - 2 );
+
+	new Player = cmd_target( id, arg, 1 );
+
+	if( !Player )
+		return PLUGIN_HANDLED;
+
+	new szName[32];
+	get_user_name( Player, szName, charsmax( szName ) );
+
+	new buffer[60];
+
+	if( is_user_alive( Player ) )
+	{
+		format( buffer, charsmax( buffer ), "%s^1 : %s", szName, arg2 );
+	}
+	else
+	{
+		format( buffer, charsmax( buffer ), "^1*DEAD*^2 %s^1 : %s", szName, arg2 );
+	}
+
+	switch( cs_get_user_team( Player ) )
+	{
+		case CS_TEAM_T:	client_print_color( 0, Red, buffer );
+		case CS_TEAM_CT: client_print_color( 0, Blue, buffer );
+		case CS_TEAM_SPECTATOR: client_print_color( 0, Grey, buffer );
+		default: return PLUGIN_HANDLED;
+	}
+
+	return PLUGIN_HANDLED;	
+}
+
+client_print_color(id, iColor=DontChange, const szMsg[], any:...)
+{
+	// check if id is different from 0
+	if( id && !is_user_connected(id) )
+	{
+		return 0;
+	}
+
+	if( iColor > Grey )
+	{
+		iColor = DontChange;
+	}
+
+	new szMessage[192];
+	if( iColor == DontChange )
+	{
+		szMessage[0] = 0x04;
+	}
+	else
+	{
+		szMessage[0] = 0x03;
+	}
+
+	new iParams = numargs();
+	// Specific player code
+	if(id)
+	{
+		if( iParams == 3 )
+		{
+			copy(szMessage[1], charsmax(szMessage)-1, szMsg);
+		}
+		else
+		{
+			vformat(szMessage[1], charsmax(szMessage)-1, szMsg, 4);
+		}
+
+		if( iColor )
+		{
+			new szTeam[11]; // store current team so we can restore it
+			get_user_team(id, szTeam, charsmax(szTeam));
+
+			// set id TeamInfo in consequence
+			// so SayText msg gonna show the right color
+			Send_TeamInfo(id, id, g_szTeamName[iColor]);
+
+			// Send the message
+			Send_SayText(id, id, szMessage);
+
+			// restore TeamInfo
+			Send_TeamInfo(id, id, szTeam);
+		}
+		else
+		{
+			Send_SayText(id, id, szMessage);
+		}
+	} 
+
+	// Send message to all players
+	else
+	{
+		// Figure out if at least 1 player is connected
+		// so we don't send useless message if not
+		// and we gonna use that player as team reference (aka SayText message sender) for color change
+		new iPlayers[32], iNum;
+		get_players(iPlayers, iNum, "ch");
+		if( !iNum )
+		{
+			return 0;
+		}
+
+		new iFool = iPlayers[0];
+
+		new iMlNumber, i, j;
+		new Array:aStoreML = ArrayCreate();
+		if( iParams >= 5 ) // ML can be used
+		{
+			for(j=4; j<iParams; j++)
+			{
+				// retrieve original param value and check if it's LANG_PLAYER value
+				if( getarg(j) == LANG_PLAYER )
+				{
+					i=0;
+					// as LANG_PLAYER == -1, check if next parm string is a registered language translation
+					while( ( szMessage[ i ] = getarg( j + 1, i++ ) ) ) {}
+					if( GetLangTransKey(szMessage) != TransKey_Bad )
+					{
+						// Store that arg as LANG_PLAYER so we can alter it later
+						ArrayPushCell(aStoreML, j++);
+
+						// Update ML array saire so we'll know 1st if ML is used,
+						// 2nd how many args we have to alterate
+						iMlNumber++;
+					}
+				}
+			}
+		}
+
+		// If arraysize == 0, ML is not used
+		// we can only send 1 MSG_BROADCAST message
+		if( !iMlNumber )
+		{
+			if( iParams == 3 )
+			{
+				copy(szMessage[1], charsmax(szMessage)-1, szMsg);
+			}
+			else
+			{
+				vformat(szMessage[1], charsmax(szMessage)-1, szMsg, 4);
+			}
+
+			if( iColor )
+			{
+				new szTeam[11];
+				get_user_team(iFool, szTeam, charsmax(szTeam));
+				Send_TeamInfo(0, iFool, g_szTeamName[iColor]);
+				Send_SayText(0, iFool, szMessage);
+				Send_TeamInfo(0, iFool, szTeam);
+			}
+			else
+			{
+				Send_SayText(0, iFool, szMessage);
+			}
+		}
+
+		// ML is used, we need to loop through all players,
+		// format text and send a MSG_ONE_UNRELIABLE SayText message
+		else
+		{
+			new szTeam[11], szFakeTeam[10];
+			
+			if( iColor )
+			{
+				get_user_team(iFool, szTeam, charsmax(szTeam));
+				copy(szFakeTeam, charsmax(szFakeTeam), g_szTeamName[iColor]);
+			}
+
+			for( i = 0; i < iNum; i++ )
+			{
+				id = iPlayers[i];
+
+				for(j=0; j<iMlNumber; j++)
+				{
+					// Set all LANG_PLAYER args to player index ( = id )
+					// so we can format the text for that specific player
+					setarg(ArrayGetCell(aStoreML, j), _, id);
+				}
+
+				// format string for specific player
+				vformat(szMessage[1], charsmax(szMessage)-1, szMsg, 4);
+
+				if( iColor )
+				{
+					Send_TeamInfo(id, iFool, szFakeTeam);
+					Send_SayText(id, iFool, szMessage);
+					Send_TeamInfo(id, iFool, szTeam);
+				}
+				else
+				{
+					Send_SayText(id, iFool, szMessage);
+				}
+			}
+			ArrayDestroy(aStoreML);
+		}
+	}
+	return 1;
+}
+
+Send_TeamInfo(iReceiver, iPlayerId, szTeam[])
+{
+	static iTeamInfo = 0;
+	if( !iTeamInfo )
+	{
+		iTeamInfo = get_user_msgid("TeamInfo");
+	}
+	message_begin(iReceiver ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, iTeamInfo, .player=iReceiver);
+	write_byte(iPlayerId);
+	write_string(szTeam);
+	message_end();
+}
+
+Send_SayText(iReceiver, iPlayerId, szMessage[])
+{
+	static iSayText = 0;
+	if( !iSayText )
+	{
+		iSayText = get_user_msgid("SayText");
+	}
+	message_begin(iReceiver ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, iSayText, .player=iReceiver);
+	write_byte(iPlayerId);
+	write_string(szMessage);
+	message_end();
+}
